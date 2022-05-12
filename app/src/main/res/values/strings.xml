@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Location</string>
+    <string name="current_location">موقعیت شما</string>
+    <string name="added_location">موقعیت انتخابی</string>
+</resources>
