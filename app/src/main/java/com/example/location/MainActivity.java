@@ -9,8 +9,10 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.location.Location;
 import android.location.LocationManager;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
@@ -30,13 +32,28 @@ import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
+import com.google.android.libraries.places.api.Places;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Objects;
+
+import okhttp3.Request;
 
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
 
-    //    private Button btnCurrentLocation;
     public static final int REQUEST_CODE_LOCATION = 0;
     private FusedLocationProviderClient fusedLocationClient;
     private GoogleMap map;
@@ -46,6 +63,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private ArrayList<LatLng> locations = new ArrayList<>();
     private Location selectedLocation;
     private Marker selectedMarker;
+    private Polyline polyline;
+    private List<List<HashMap<String, String>>> routes;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,31 +72,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         setContentView(R.layout.activity_main);
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-//        findViews();
-//        setListeners();
         defaultLocation();
         setUpMap();
-        distance();
-
     }
-
-//    private void setListeners() {
-//        btnCurrentLocation.setOnClickListener(new View.OnClickListener() {
-//            @RequiresApi(api = Build.VERSION_CODES.M)
-//            @Override
-//            public void onClick(View view) {
-//                if (hasPermission()) {
-//                    requestLocation();
-//                } else {
-//                    requestLocationPermission();
-//                }
-//            }
-//        });
-//    }
-//
-//    private void findViews() {
-//        btnCurrentLocation = findViewById(R.id.btn_current_location);
-//    }
 
     private void setUpMap() {
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
@@ -190,7 +187,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         map.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
             @Override
             public void onMapClick(@NonNull LatLng latLng) {
-                if(selectedMarker != null){
+                if (selectedMarker != null) {
                     selectedMarker.remove();
                 }
                 MarkerOptions marker = new MarkerOptions();
@@ -209,12 +206,21 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void drawPath(LatLng destination) {
 
+        // Getting URL to the Google Directions API
+        String url = getDirectionsUrl(
+                new LatLng(selectedLocation.getLatitude(), selectedLocation.getLongitude())
+                , destination);
+
+        DownloadTask downloadTask = new DownloadTask();
+
+        // Start downloading json data from Google Directions API
+        downloadTask.execute(url);
     }
 
     private void defaultLocation() {
-            locations.add(new LatLng(35.759131, 51.333236));
-            locations.add(new LatLng(35.757785, 51.327323));
-            locations.add(new LatLng(35.757815, 51.320967));
+        locations.add(new LatLng(35.759131, 51.333236));
+        locations.add(new LatLng(35.757785, 51.327323));
+        locations.add(new LatLng(35.757815, 51.320967));
     }
 
     private void addMarkerDefaultLocation() {
@@ -223,7 +229,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
     }
 
-    //
     private LatLng checkDistance() {
         float[] distances = new float[3];
         for (int i = 0; i < locations.size(); i++) {
@@ -246,57 +251,116 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         return locations.get(0);
 
     }
-    //
 
-//    private double distance(double lat2, double lon2) {
-//        double theta = mLongitude - lon2;
-//        double dist = Math.sin(deg2rad(mLatitude)) * Math.sin(deg2rad(lat2))
-//                + Math.cos(deg2rad(mLatitude)) * Math.cos(deg2rad(lat2))
-//                * Math.cos(deg2rad(theta));
-//        dist = Math.acos(dist);
-//        dist = rad2deg(dist);
-//        dist = dist * 60; // 60 nautical miles per degree of seperation
-//        dist = dist * 1852; // 1852 meters per nautical mile
-//        return (dist);
-//    }
-//
-//    private double deg2rad(double deg) {
-//        return (deg * Math.PI / 180.0);
-//    }
-//
-//    private double rad2deg(double rad) {
-//        return (rad * 180.0 / Math.PI);
-//    }
+    private String getDirectionsUrl(LatLng origin, LatLng destination) {
 
-    private float distance() {
-        Location location1 = new Location("");
-        location1.setLatitude(mLatitude);
-        location1.setLongitude(mLongitude);
+        String strOrigin = "origin=" + origin.latitude + "," + origin.longitude;
+        String strDest = "destination=" + destination.latitude + "," + destination.longitude;
+        String key = "key=AIzaSyB8eJ_2MFLjYYBxf9KYWHbqeoWRtkKz820";
+        String parameters = strOrigin + "&" + strDest + "&" + key;
+        String output = "json";
+        String url = "https://maps.googleapis.com/maps/api/directions/" + output + "?" + parameters;
+        return url;
+    }
 
-        Location location2 = new Location("");
-        location2.setLatitude(35.759131);
-        location2.setLongitude(51.333236);
+    private String downloadUrl(String strUrl) throws IOException {
+        String data = "";
+        InputStream inputStream = null;
+        HttpURLConnection urlConnection = null;
+        try {
+            URL url = new URL(strUrl);
+            urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.connect();
+            inputStream = urlConnection.getInputStream();
+            BufferedReader bufferReader = new BufferedReader(
+                    new InputStreamReader(inputStream));
+            StringBuffer stringBuffer = new StringBuffer();
+            String line = "";
+            while ((line = bufferReader.readLine()) != null) {
+                stringBuffer.append(line);
+            }
+            data = stringBuffer.toString();
+            bufferReader.close();
 
-        Location location3 = new Location("");
-        location3.setLatitude(35.757785);
-        location3.setLongitude(51.327323);
+        } catch (Exception e) {
+            Log.e("Exception on download", e.toString());
+        } finally {
+            inputStream.close();
+            urlConnection.disconnect();
+        }
+        return data;
+    }
 
-        Location location4 = new Location("");
-        location4.setLatitude(35.757815);
-        location4.setLongitude(51.320967);
+    private class DownloadTask extends AsyncTask<String, Void, String> {
 
-        float distance1 = location1.distanceTo(location2);
-        float distance2 = location1.distanceTo(location3);
-        float distance3 = location1.distanceTo(location4);
+        @Override
+        protected String doInBackground(String... url) {
 
-        float minDistance;
-        if (distance1 < distance2 && distance1 < distance3)
-            minDistance = distance1;
-        if (distance2 < distance3)
-            minDistance = distance2;
-        else minDistance = distance3;
+            String data = "";
+            try {
+                data = downloadUrl(url[0]);
+                Log.d("DownloadTask", "DownloadTask : " + data);
+            } catch (Exception e) {
+                Log.e("Background Task", e.toString());
+            }
+            return data;
+        }
 
-        Log.e("TAG", "distance: " + minDistance);
-        return minDistance;
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            ParserTask parserTask = new ParserTask();
+            parserTask.execute(result);
+        }
+    }
+
+    private class ParserTask extends AsyncTask<String, Integer, List<List<HashMap<String, String>>>> {
+
+        @Override
+        protected List<List<HashMap<String, String>>> doInBackground(String... jsonData) {
+
+            Log.e("TAG", "doInBackground: " + Arrays.toString(jsonData));
+            JSONObject jsonObject;
+
+            try {
+                jsonObject = new JSONObject(jsonData[0]);
+                DirectionsJSONParser parser = new DirectionsJSONParser();
+                routes = parser.parse(jsonObject);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return routes;
+        }
+
+        @Override
+        protected void onPostExecute(List<List<HashMap<String, String>>> result) {
+            ArrayList<LatLng> points ;
+            PolylineOptions lineOptions = null;
+
+            for (int i = 0; i < routes.size(); i++) {
+                points = new ArrayList<>();
+                lineOptions = new PolylineOptions();
+
+                List<HashMap<String, String>> path = routes.get(i);
+                for (int j = 0; j < path.size(); j++) {
+                    HashMap<String, String> point = path.get(j);
+
+                    double latitude = Double.parseDouble(Objects.requireNonNull(point.get("lat")));
+                    double lngitude = Double.parseDouble(Objects.requireNonNull(point.get("lng")));
+                    LatLng position = new LatLng(latitude, lngitude);
+                    points.add(position);
+                }
+                lineOptions.addAll(points);
+                lineOptions.width(8);
+                lineOptions.color(Color.RED);
+            }
+
+            if (lineOptions != null) {
+                if (polyline != null) {
+                    polyline.remove();
+                }
+                polyline = map.addPolyline(lineOptions);
+            }
+        }
     }
 }
